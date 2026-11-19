@@ -16,8 +16,6 @@ type Query struct {
 	Location         string
 	Remote           bool
 	PostedWithinDays int
-	// MaxPages bounds how many provider pages one search may fetch.
-	MaxPages int
 }
 
 type Result struct {
@@ -51,11 +49,10 @@ func New(memory Memory, source Provider) *Engine {
 const (
 	DefaultCount            = 10
 	DefaultPostedWithinDays = 14
-	maxPage                 = 100
-	linkedInPage            = 10
+	maxResults              = 100
+	linkedInPageSize        = 10
 	maxPhrases              = 5
-	maxPageBudget           = 20
-	minPageBudget           = 4
+	maxPagesPerStream       = 10
 )
 
 // stream is one phrasing on one provider. Its offset lives only for this run.
@@ -63,6 +60,7 @@ type stream struct {
 	source string
 	text   string
 	offset int
+	pages  int
 	dry    bool
 }
 
@@ -84,21 +82,19 @@ func (e *Engine) Search(ctx context.Context, query Query) (Result, error) {
 		return result, nil
 	}
 
-	pages := 0
 	for index := range streams {
-		if complete(query, result) || pages >= query.MaxPages {
+		if complete(query, result) {
 			break
 		}
 		if err := e.page(ctx, &streams[index], query, deduped, &result); err != nil {
 			return result, err
 		}
-		pages++
 	}
 
-	for !complete(query, result) && pages < query.MaxPages {
+	for !complete(query, result) {
 		progress := false
 		for index := range streams {
-			if complete(query, result) || pages >= query.MaxPages {
+			if complete(query, result) {
 				break
 			}
 			if streams[index].dry {
@@ -107,7 +103,6 @@ func (e *Engine) Search(ctx context.Context, query Query) (Result, error) {
 			if err := e.page(ctx, &streams[index], query, deduped, &result); err != nil {
 				return result, err
 			}
-			pages++
 			progress = true
 		}
 		if !progress {
@@ -129,16 +124,12 @@ func normalize(query *Query) {
 	if query.Count <= 0 {
 		query.Count = DefaultCount
 	}
-	if query.Count > maxPage {
-		query.Count = maxPage
+	if query.Count > maxResults {
+		query.Count = maxResults
 	}
 	if query.PostedWithinDays <= 0 {
 		query.PostedWithinDays = DefaultPostedWithinDays
 	}
-	if query.MaxPages <= 0 {
-		query.MaxPages = min(maxPageBudget, max(minPageBudget, query.Count))
-	}
-
 	seen := make(map[string]struct{}, len(query.Texts))
 	phrases := make([]string, 0, len(query.Texts))
 	for _, text := range query.Texts {
@@ -174,6 +165,7 @@ func (e *Engine) page(ctx context.Context, item *stream, query Query, deduped ma
 		PageSize:         query.pageSize(item.source),
 	}
 
+	item.pages++
 	rows, err := e.source.Search(ctx, item.source, request, item.offset)
 	if err != nil {
 		// One provider failing must not cost the rows another already found.
@@ -219,8 +211,9 @@ func (e *Engine) page(ctx context.Context, item *stream, query Query, deduped ma
 	}
 
 	item.offset += len(rows)
-	if len(rows) < request.PageSize {
-		// A short page is the only end-of-results signal a provider gives.
+	// A short page ends the stream, and so does reaching the page cap, so a
+	// query whose results are all decided cannot page without limit.
+	if len(rows) < request.PageSize || item.pages >= maxPagesPerStream {
 		item.dry = true
 	}
 	return nil
@@ -230,7 +223,7 @@ func (e *Engine) page(ctx context.Context, item *stream, query Query, deduped ma
 // so asking for more would make every page look short and end the stream.
 func (query Query) pageSize(source string) int {
 	if source == LinkedIn {
-		return linkedInPage
+		return linkedInPageSize
 	}
-	return min(max(query.Count*2, 10), maxPage)
+	return min(max(query.Count*2, 10), maxResults)
 }

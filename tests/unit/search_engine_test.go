@@ -210,6 +210,38 @@ func TestAggregatorURLsDropped(t *testing.T) {
 	}
 }
 
+// A stream stops after ten pages even when every page is full of decided rows.
+func TestStreamPageLimit(t *testing.T) {
+	memory := newMemory()
+	provider := &fakeProvider{pages: map[call][]job.Job{}}
+	for page := range 10 {
+		offset := page * 10
+		rows := postings(search.Freehire, offset, 10)
+		for _, item := range rows {
+			memory.blocked[item.Key] = true
+		}
+		provider.pages[call{source: search.Freehire, text: "sre", offset: offset}] = rows
+	}
+
+	result := run(t, provider, memory, search.Query{Texts: []string{"sre"}, Count: 5})
+
+	if result.Exhausted != true {
+		t.Errorf("a capped stream must count as exhausted")
+	}
+	freehire := 0
+	for _, item := range provider.calls {
+		if item.source == search.Freehire {
+			freehire++
+		}
+	}
+	if freehire != 10 {
+		t.Errorf("freehire pages = %d, want the cap of 10", freehire)
+	}
+	if len(result.Jobs) != 0 {
+		t.Errorf("returned %d jobs, want none", len(result.Jobs))
+	}
+}
+
 func TestExhaustion(t *testing.T) {
 	result := run(t, &fakeProvider{}, newMemory(), search.Query{Texts: []string{"sre"}, Count: 5})
 
@@ -218,28 +250,6 @@ func TestExhaustion(t *testing.T) {
 	}
 	if !result.Exhausted {
 		t.Error("every stream was dry, so exhausted should be true")
-	}
-}
-
-// The page budget stops a search whose pages are all already decided.
-func TestPageLimitStops(t *testing.T) {
-	memory := newMemory()
-	for index := range 20 {
-		memory.blocked["freehire:"+itoa(index)] = true
-	}
-
-	provider := &fakeProvider{pages: map[call][]job.Job{
-		{source: search.Freehire, text: "sre", offset: 0}:  postings(search.Freehire, 0, 10),
-		{source: search.Freehire, text: "sre", offset: 10}: postings(search.Freehire, 10, 10),
-	}}
-
-	result := run(t, provider, memory, search.Query{Texts: []string{"sre"}, Count: 5, MaxPages: 2})
-
-	if len(provider.calls) != 2 {
-		t.Errorf("made %d calls, want the budget of 2", len(provider.calls))
-	}
-	if result.Exhausted {
-		t.Error("the streams were not dry, so exhausted should be false")
 	}
 }
 

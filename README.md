@@ -60,7 +60,6 @@ Add this entry to the MCP configuration. The `pi` path is
   "mcpServers": {
     "jobradar": {
       "command": "/Users/Ude/.golang/bin/jobradar-mcp",
-      "lifecycle": "lazy",
       "description": "Search job boards with memory: returns postings you have not decided on yet."
     }
   }
@@ -83,8 +82,9 @@ with no decision was seen but never judged, so it is not blocked and can come
 back on a later search.
 
 Search positions are not stored. Every search starts at the first result of each
-stream and walks down until the target is met, the pages run out, or the page
-budget is spent.
+stream and walks down until the target is met or every stream runs out. A stream
+stops after ten pages, so a query whose results are all decided cannot page
+without limit.
 
 Identity is two values. The key is `source:id`, which is what the model saves.
 The URL key is the posting URL without the query string, the fragment and the
@@ -104,11 +104,12 @@ argument mapping.
 ## Layout
 
 ```text
-cmd/jobradar-mcp     the server: config, wiring, stdio transport
-internal/openings    MCP client for openings-mcp, and the row mapping
-internal/search      paging, dedupe, budget, cursor
-internal/store       SQLite: jobs and decisions
-internal/tools       the four tool contracts
+cmd/jobradar-mcp   the server: config, wiring, stdio transport
+internal/job       the posting shape
+internal/search    MCP client, row mapping, streams, paging, dedupe
+internal/store     SQLite: jobs and decisions
+internal/tools     the four tool contracts
+tests/unit         engine tests with a fake provider and memory
 ```
 
 ## Tests
