@@ -34,6 +34,8 @@ func parse(source string, row map[string]any) (job.Job, bool) {
 			posting.Posted = text(row["posted"])
 		}
 		posting.Remote = boolean(row["remote"])
+		// The guest search result carries no body; only the detail tool does,
+		// which this program no longer calls.
 		posting.Description = text(row["description"])
 	default:
 		return job.Job{}, false

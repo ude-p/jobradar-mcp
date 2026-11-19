@@ -5,8 +5,10 @@ package search
 import (
 	"context"
 	"fmt"
+	"log"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -16,6 +18,12 @@ import (
 const (
 	Freehire = "freehire"
 	LinkedIn = "linkedin"
+
+	// The detail endpoint throttles quickly, so enrichment is paced, retried
+	// once on a 429 and capped per search.
+	detailDelay     = 400 * time.Millisecond
+	detailRetryWait = 3 * time.Second
+	maxDetails      = 6
 )
 
 // Request is the source-neutral query that each provider maps into its own
@@ -31,6 +39,9 @@ type Request struct {
 
 type provider struct {
 	searchTool string
+	// detailTool is set when the search result carries no body, so one extra
+	// request per posting is needed to read it.
+	detailTool string
 	arguments  func(Request, int) map[string]any
 }
 
@@ -41,6 +52,7 @@ var providers = map[string]provider{
 	},
 	LinkedIn: {
 		searchTool: "linkedin_search_jobs",
+		detailTool: "linkedin_get_job_detail",
 		arguments:  linkedInArguments,
 	},
 }
@@ -130,8 +142,14 @@ func (c *Client) Verify(ctx context.Context) error {
 	var missing []string
 	for _, name := range Names() {
 		entry := providers[name]
-		if _, ok := available[entry.searchTool]; !ok {
-			missing = append(missing, entry.searchTool)
+		tools := []string{entry.searchTool}
+		if entry.detailTool != "" {
+			tools = append(tools, entry.detailTool)
+		}
+		for _, tool := range tools {
+			if _, ok := available[tool]; !ok {
+				missing = append(missing, tool)
+			}
 		}
 	}
 	if len(missing) > 0 {
@@ -168,7 +186,61 @@ func (c *Client) Search(ctx context.Context, source string, request Request, off
 			postings = append(postings, posting)
 		}
 	}
+
+	// LinkedIn's search result carries no body, so read one posting at a time
+	// from the detail tool. Sequential on purpose: that endpoint rate limits.
+	if entry.detailTool != "" {
+		attempts := 0
+		for index := range postings {
+			if attempts >= maxDetails {
+				break
+			}
+			if postings[index].Description != "" {
+				continue
+			}
+			if attempts > 0 {
+				time.Sleep(detailDelay)
+			}
+			attempts++
+
+			body, err := c.description(ctx, entry, postings[index].ID)
+			if err != nil {
+				log.Printf("%s detail %s: %v", source, postings[index].ID, err)
+				continue
+			}
+			postings[index].Description = body
+		}
+	}
 	return postings, nil
+}
+
+// description reads one posting body, waiting once and retrying when the
+// provider answers with a rate limit.
+func (c *Client) description(ctx context.Context, entry provider, id string) (string, error) {
+	body, err := c.readDescription(ctx, entry, id)
+	if err != nil && strings.Contains(err.Error(), "429") {
+		time.Sleep(detailRetryWait)
+		return c.readDescription(ctx, entry, id)
+	}
+	return body, err
+}
+
+func (c *Client) readDescription(ctx context.Context, entry provider, id string) (string, error) {
+	result, err := c.session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      entry.detailTool,
+		Arguments: map[string]any{"job_id": id},
+	})
+	if err != nil {
+		return "", err
+	}
+	if result.IsError {
+		return "", fmt.Errorf("%s", contentText(result))
+	}
+	row, err := object(result)
+	if err != nil {
+		return "", err
+	}
+	return text(row["description"]), nil
 }
 
 func object(result *mcp.CallToolResult) (map[string]any, error) {
