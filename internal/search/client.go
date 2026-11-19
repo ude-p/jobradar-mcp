@@ -31,19 +31,16 @@ type Request struct {
 
 type provider struct {
 	searchTool string
-	detailTool string
 	arguments  func(Request, int) map[string]any
 }
 
 var providers = map[string]provider{
 	Freehire: {
 		searchTool: "freehire_search_jobs",
-		detailTool: "freehire_get_job_detail",
 		arguments:  freehireArguments,
 	},
 	LinkedIn: {
 		searchTool: "linkedin_search_jobs",
-		detailTool: "linkedin_get_job_detail",
 		arguments:  linkedInArguments,
 	},
 }
@@ -133,10 +130,8 @@ func (c *Client) Verify(ctx context.Context) error {
 	var missing []string
 	for _, name := range Names() {
 		entry := providers[name]
-		for _, tool := range []string{entry.searchTool, entry.detailTool} {
-			if _, ok := available[tool]; !ok {
-				missing = append(missing, tool)
-			}
+		if _, ok := available[entry.searchTool]; !ok {
+			missing = append(missing, entry.searchTool)
 		}
 	}
 	if len(missing) > 0 {
@@ -174,37 +169,6 @@ func (c *Client) Search(ctx context.Context, source string, request Request, off
 		}
 	}
 	return postings, nil
-}
-
-func (c *Client) Detail(ctx context.Context, source, id string) (job.Job, error) {
-	entry, ok := providers[source]
-	if !ok {
-		return job.Job{}, fmt.Errorf("unknown source %q", source)
-	}
-
-	result, err := c.session.CallTool(ctx, &mcp.CallToolParams{
-		Name:      entry.detailTool,
-		Arguments: map[string]any{"job_id": id},
-	})
-	if err != nil {
-		return job.Job{}, fmt.Errorf("%s: %v", entry.detailTool, err)
-	}
-	if result.IsError {
-		return job.Job{}, fmt.Errorf("%s: %s", entry.detailTool, contentText(result))
-	}
-
-	row, err := object(result)
-	if err != nil {
-		return job.Job{}, fmt.Errorf("%s: %v", entry.detailTool, err)
-	}
-	posting, ok := parse(source, row)
-	if !ok {
-		return job.Job{}, fmt.Errorf("%s: no posting for %s", entry.detailTool, id)
-	}
-
-	// Only detail carries the body; search ships the preview.
-	posting.Description = text(row["description"])
-	return posting, nil
 }
 
 func object(result *mcp.CallToolResult) (map[string]any, error) {

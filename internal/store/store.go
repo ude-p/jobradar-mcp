@@ -33,6 +33,7 @@ create table if not exists jobs (
 	company     text not null default '',
 	location    text not null default '',
 	posted      text not null default '',
+	description text not null default '',
 	decision    text,
 	decided_at  text
 );
@@ -73,7 +74,7 @@ func (s *Store) Blocked(ctx context.Context, key, urlKey string) (bool, error) {
 	return true, nil
 }
 
-// Touch records that a posting was shown, so save can find it by key later. The
+// Touch stores the postings a search returned, so save can find them by key. The
 // upsert refreshes the posting fields and leaves decision alone.
 func (s *Store) Touch(ctx context.Context, postings []job.Job) error {
 	if len(postings) == 0 {
@@ -89,14 +90,15 @@ func (s *Store) Touch(ctx context.Context, postings []job.Job) error {
 	}()
 
 	stmt, err := tx.PrepareContext(ctx, `
-		insert into jobs (key, source, provider_id, url_key, url, title, company, location, posted)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		insert into jobs (key, source, provider_id, url_key, url, title, company, location, posted, description)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		on conflict (key) do update set
-			url      = excluded.url,
-			title    = excluded.title,
-			company  = excluded.company,
-			location = excluded.location,
-			posted   = excluded.posted`)
+			url         = excluded.url,
+			title       = excluded.title,
+			company     = excluded.company,
+			location    = excluded.location,
+			posted      = excluded.posted,
+			description = excluded.description`)
 	if err != nil {
 		return err
 	}
@@ -107,13 +109,37 @@ func (s *Store) Touch(ctx context.Context, postings []job.Job) error {
 	for _, posting := range postings {
 		if _, err := stmt.ExecContext(ctx,
 			posting.Key, posting.Source, posting.ID, job.URLKey(posting.URL), posting.URL,
-			posting.Title, posting.Company, posting.Location, posting.Posted,
+			posting.Title, posting.Company, posting.Location, posting.Posted, posting.Description,
 		); err != nil {
 			return fmt.Errorf("record %s: %v", posting.Key, err)
 		}
 	}
 
 	return tx.Commit()
+}
+
+// ByKeys returns the stored postings for the keys that exist, plus the keys that
+// do not, so a caller can report a typo instead of silently doing nothing.
+func (s *Store) ByKeys(ctx context.Context, keys []string) ([]job.Job, []string, error) {
+	found := make([]job.Job, 0, len(keys))
+	missing := make([]string, 0)
+	for _, key := range keys {
+		var item job.Job
+		err := s.db.QueryRowContext(ctx, `
+			select key, source, provider_id, url, title, company, location, posted, description
+			from jobs where key = ?`, key).
+			Scan(&item.Key, &item.Source, &item.ID, &item.URL, &item.Title,
+				&item.Company, &item.Location, &item.Posted, &item.Description)
+		if err == sql.ErrNoRows {
+			missing = append(missing, key)
+			continue
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		found = append(found, item)
+	}
+	return found, missing, nil
 }
 
 // Decide records the model's verdict for keys it saw. Unknown keys are ignored.
@@ -158,28 +184,6 @@ func (s *Store) Decide(ctx context.Context, keys []string, decision string) (int
 		return 0, err
 	}
 	return updated, nil
-}
-
-// ApprovedJobs returns the stored rows for keys the model approved, so the tool
-// can hand back the shortlist without another provider call.
-func (s *Store) ApprovedJobs(ctx context.Context, keys []string) ([]job.Job, error) {
-	approved := make([]job.Job, 0, len(keys))
-	for _, key := range keys {
-		var item job.Job
-		err := s.db.QueryRowContext(ctx, `
-			select key, source, provider_id, url, title, company, location, posted
-			from jobs where key = ? and decision = ?`, key, Approved).
-			Scan(&item.Key, &item.Source, &item.ID, &item.URL, &item.Title,
-				&item.Company, &item.Location, &item.Posted)
-		if err == sql.ErrNoRows {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		approved = append(approved, item)
-	}
-	return approved, nil
 }
 
 func (s *Store) Counts(ctx context.Context) (map[string]int, error) {

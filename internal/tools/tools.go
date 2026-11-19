@@ -22,44 +22,34 @@ type SearchInput struct {
 }
 
 type SearchOutput struct {
-	Jobs      []job.Job `json:"jobs" jsonschema:"Postings you have not decided on yet."`
+	Jobs      []job.Job `json:"jobs" jsonschema:"Postings you have not decided on yet, each with its body."`
 	Exhausted bool      `json:"exhausted" jsonschema:"True when the providers ran out of postings for this query, so a second call adds nothing."`
 	Notes     []string  `json:"notes,omitempty" jsonschema:"Provider errors that did not stop the run. When present, the list is partial."`
 }
 
-type DetailInput struct {
-	Source string `json:"source" jsonschema:"The source field of the posting, for example freehire or linkedin."`
-	ID     string `json:"id" jsonschema:"The id field of the posting from jobradar_search."`
-}
-
-type DetailOutput struct {
-	Job job.Job `json:"job" jsonschema:"The posting with its full description, which search only previews."`
-}
-
 type SaveInput struct {
-	Approved []string `json:"approved,omitempty" jsonschema:"Keys of postings that fit. They are not returned again."`
-	Rejected []string `json:"rejected,omitempty" jsonschema:"Keys of postings that do not fit. They are not returned again."`
+	Accepted []string `json:"accepted,omitempty" jsonschema:"Keys of postings that fit. They are recorded as approved and returned."`
+	Rejected []string `json:"rejected,omitempty" jsonschema:"Keys of postings that do not fit. They are recorded as rejected."`
 }
 
 type SaveOutput struct {
-	Approved []job.Job `json:"approved" jsonschema:"The approved postings, ready to report."`
-	Rejected int       `json:"rejected" jsonschema:"Rows marked rejected."`
-	Unknown  int       `json:"unknown" jsonschema:"Keys that were not in the store, which means they were invented or came from another tool."`
+	Accepted []job.Job `json:"accepted" jsonschema:"The accepted postings, ready to report."`
+	Rejected int       `json:"rejected" jsonschema:"Rows recorded as rejected."`
+	Unknown  int       `json:"unknown" jsonschema:"Keys that no stored posting matched, so nothing was recorded for them."`
 }
 
 type StatusInput struct{}
 
-// Deps is what the tools need from the rest of the program.
-type Deps struct {
-	Engine   *search.Engine
-	Client   *search.Client
-	Memory   *store.Store
-	Database string
-}
-
 type StatusOutput struct {
 	Database string         `json:"database"`
 	Counts   map[string]int `json:"counts"`
+}
+
+// Deps is what the tools need from the rest of the program.
+type Deps struct {
+	Engine   *search.Engine
+	Memory   *store.Store
+	Database string
 }
 
 func Register(server *mcp.Server, deps Deps) {
@@ -69,25 +59,17 @@ func Register(server *mcp.Server, deps Deps) {
 		Description: "Search job boards and company career sites, and return only postings this session has not shown you and you have not decided on. " +
 			"Pass two or three phrasings when the role has several names; the tool pools them and drops duplicates. " +
 			"The tool pages the providers internally until it has count postings, so one call is usually enough. " +
-			"Results carry a preview only: fetch the ones worth reading with get_detail before judging. " +
+			"Every posting carries its body, so you can judge without another call. " +
 			"Then report what you decided with save, otherwise the same postings come back.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, OpenWorldHint: new(true)},
 	}, searchTool(deps.Engine))
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:  "get_detail",
-		Title: "Read one posting",
-		Description: "Return the full body of one posting by the source and id that search returned. " +
-			"Use it only for postings worth judging: it costs a provider request per call.",
-		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: new(true)},
-	}, detailTool(deps.Client))
-
-	mcp.AddTool(server, &mcp.Tool{
 		Name:  "save",
-		Title: "Record your verdicts",
+		Title: "Save your verdicts",
 		Description: "Record which postings fit and which do not, by the key field from search. " +
-			"Call it once after judging a batch. The approved postings come back, so report them from here. " +
-			"An unsaved posting can be shown to you again, and a saved one never is.",
+			"Call it once after judging a batch. The accepted postings come back, so report them from here. " +
+			"A posting you never save is not decided, so a later search can return it again.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, OpenWorldHint: new(false)},
 	}, saveTool(deps.Memory))
 
@@ -124,19 +106,17 @@ func searchTool(engine *search.Engine) mcp.ToolHandlerFor[SearchInput, SearchOut
 	}
 }
 
-func detailTool(client *search.Client) mcp.ToolHandlerFor[DetailInput, DetailOutput] {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, input DetailInput) (*mcp.CallToolResult, DetailOutput, error) {
-		posting, err := client.Detail(ctx, input.Source, input.ID)
-		if err != nil {
-			return nil, DetailOutput{}, err
-		}
-		return nil, DetailOutput{Job: posting}, nil
-	}
-}
-
 func saveTool(memory *store.Store) mcp.ToolHandlerFor[SaveInput, SaveOutput] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, input SaveInput) (*mcp.CallToolResult, SaveOutput, error) {
-		marked, err := memory.Decide(ctx, input.Approved, store.Approved)
+		accepted, missingAccepted, err := memory.ByKeys(ctx, input.Accepted)
+		if err != nil {
+			return nil, SaveOutput{}, err
+		}
+		if _, err := memory.Decide(ctx, input.Accepted, store.Approved); err != nil {
+			return nil, SaveOutput{}, err
+		}
+
+		_, missingRejected, err := memory.ByKeys(ctx, input.Rejected)
 		if err != nil {
 			return nil, SaveOutput{}, err
 		}
@@ -144,13 +124,12 @@ func saveTool(memory *store.Store) mcp.ToolHandlerFor[SaveInput, SaveOutput] {
 		if err != nil {
 			return nil, SaveOutput{}, err
 		}
-		approved, err := memory.ApprovedJobs(ctx, input.Approved)
-		if err != nil {
-			return nil, SaveOutput{}, err
-		}
 
-		unknown := max(0, len(input.Approved)+len(input.Rejected)-marked-rejected)
-		return nil, SaveOutput{Approved: approved, Rejected: rejected, Unknown: unknown}, nil
+		return nil, SaveOutput{
+			Accepted: accepted,
+			Rejected: rejected,
+			Unknown:  len(missingAccepted) + len(missingRejected),
+		}, nil
 	}
 }
 

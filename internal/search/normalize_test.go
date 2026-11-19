@@ -28,8 +28,8 @@ func TestParseFreehire(t *testing.T) {
 	if !posting.Remote {
 		t.Error("remote flag not read from work_mode")
 	}
-	if posting.Preview != "Kubernetes and Go" {
-		t.Errorf("preview = %q, want the tags stripped", posting.Preview)
+	if posting.Description != "Kubernetes and Go" {
+		t.Errorf("preview = %q, want the tags stripped", posting.Description)
 	}
 }
 

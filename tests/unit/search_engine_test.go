@@ -34,7 +34,6 @@ func (f *fakeProvider) Search(_ context.Context, source string, request search.R
 
 type fakeMemory struct {
 	blocked map[string]bool
-	touched []job.Job
 }
 
 func newMemory() *fakeMemory {
@@ -45,8 +44,7 @@ func (f *fakeMemory) Blocked(_ context.Context, key, urlKey string) (bool, error
 	return f.blocked[key] || f.blocked[urlKey], nil
 }
 
-func (f *fakeMemory) Touch(_ context.Context, postings []job.Job) error {
-	f.touched = append(f.touched, postings...)
+func (f *fakeMemory) Touch(_ context.Context, _ []job.Job) error {
 	return nil
 }
 

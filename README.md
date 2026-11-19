@@ -23,14 +23,13 @@ the memory that a repeated search needs.
 
 | tool | input | output |
 | --- | --- | --- |
-| `search` | `queries[]`, `count`, `country`, `location`, `remote`, `posted_within_days` | postings not yet decided, with a preview, plus `exhausted` and `notes` |
-| `get_detail` | `source`, `id` | one posting with its full description |
-| `save` | `approved[]`, `rejected[]` of `key` values | the approved postings, plus counts |
+| `search` | `queries[]`, `count`, `country`, `location`, `remote`, `posted_within_days` | postings not yet decided, each with its body, plus `exhausted` and `notes` |
+| `save` | `accepted[]`, `rejected[]` of `key` values | the accepted postings, plus counts |
 | `status` | none | database path and counts by decision |
 
-The model uses them in this order: `search`, then `get_detail` for the postings
-worth reading, then `save` with its verdicts. A posting that the model never
-saves stays undecided, so a later search can return it again.
+The model uses them in this order: `search`, which returns each posting with its
+body, then `save` with its verdicts. Search stores every posting it returns, and
+save reads those rows back by key and sets the decision.
 
 ## Requirements
 
@@ -77,16 +76,16 @@ under the home directory the process runs with.
 
 ## The memory
 
-A posting with a decision, approved or rejected, is never shown again. A posting
-with no decision was seen but never judged, so it is not blocked and can come
-back on a later search.
+A posting is stored when a search returns it, with no decision yet. `save` sets
+the decision, and an approved or rejected posting is never shown again. A
+posting that stays undecided is not blocked, so a later search can return it.
 
 Search positions are not stored. Every search starts at the first result of each
 stream and walks down until the target is met or every stream runs out. A stream
 stops after ten pages, so a query whose results are all decided cannot page
 without limit.
 
-Identity is two values. The key is `source:id`, which is what the model saves.
+Identity is two values. The key is `source:id`, which is what the model saves by.
 The URL key is the posting URL without the query string, the fragment and the
 host case, hashed. The URL key stops the same posting from two providers.
 

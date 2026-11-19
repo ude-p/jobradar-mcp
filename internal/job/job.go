@@ -18,8 +18,7 @@ type Job struct {
 	Location    string `json:"location,omitempty"`
 	Posted      string `json:"posted,omitempty"`
 	Remote      bool   `json:"remote,omitempty"`
-	Preview     string `json:"preview,omitempty" jsonschema:"Truncated body. get_detail returns the full text."`
-	Description string `json:"description,omitempty" jsonschema:"Full body, filled by get_detail only."`
+	Description string `json:"description,omitempty" jsonschema:"The posting body, as the provider supplies it."`
 }
 
 // URLKey is a stable identity for a posting URL across providers, because the

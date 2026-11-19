@@ -22,7 +22,7 @@ func parse(source string, row map[string]any) (job.Job, bool) {
 		posting.Location = text(row["location"])
 		posting.Posted = text(row["posted_at"])
 		posting.Remote = text(row["work_mode"]) == "remote"
-		posting.Preview = trim(text(row["description"]), previewLimit)
+		posting.Description = text(row["description"])
 	case LinkedIn:
 		posting.ID = text(row["id"])
 		posting.URL = text(row["url"])
@@ -34,7 +34,7 @@ func parse(source string, row map[string]any) (job.Job, bool) {
 			posting.Posted = text(row["posted"])
 		}
 		posting.Remote = boolean(row["remote"])
-		posting.Preview = trim(text(row["description"]), previewLimit)
+		posting.Description = text(row["description"])
 	default:
 		return job.Job{}, false
 	}
@@ -46,11 +46,8 @@ func parse(source string, row map[string]any) (job.Job, bool) {
 	return posting, true
 }
 
-// previewLimit keeps a search result small; the full body comes from Detail.
-const previewLimit = 400
-
-var tags = regexp.MustCompile(`<[^>]*>`)
-
+// text coerces a JSON value to a string, strips markup and collapses the runs of
+// whitespace that provider HTML leaves behind.
 func text(value any) string {
 	raw, ok := value.(string)
 	if !ok {
@@ -64,19 +61,4 @@ func boolean(value any) bool {
 	return ok && flag
 }
 
-func trim(value string, limit int) string {
-	if len(value) <= limit {
-		return value
-	}
-
-	// Cut on a rune boundary: a byte slice can split a multi-byte character
-	// and put invalid UTF-8 into the JSON the model reads.
-	cut := 0
-	for index := range value {
-		if index > limit {
-			break
-		}
-		cut = index
-	}
-	return strings.TrimSpace(value[:cut]) + "..."
-}
+var tags = regexp.MustCompile(`<[^>]*>`)
